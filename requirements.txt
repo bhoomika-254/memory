@@ -1,0 +1,30 @@
+# Core Framework
+streamlit>=1.28.0
+
+# LangGraph for orchestration (using compatible versions)
+langgraph>=0.2.0
+langchain>=0.2.0
+langchain-core>=0.2.0
+
+# Google Gemini LLM
+google-generativeai>=0.3.2
+
+# Vector Database
+qdrant-client>=1.6.4
+
+# Lexical Search
+whoosh>=2.7.4
+
+# Embeddings
+sentence-transformers>=2.2.2
+
+# Text Processing
+tiktoken>=0.5.1
+
+# Utilities
+python-dotenv>=1.0.0
+rank-bm25>=0.2.2
+
+# Data handling
+pandas>=2.1.4
+numpy>=1.24.3
