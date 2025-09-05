@@ -42,9 +42,14 @@ except ImportError as e:
     memory_orchestrator = None
 
 try:
-    from src.components.gemini_service import gemini_service
+    from src.components.gemini_service import initialize_gemini_service
     from src.components.neo4j_manager import Neo4jManager
     COMPONENTS_AVAILABLE = True
+    
+    # Initialize optimized services
+    neo4j_manager = Neo4jManager()
+    gemini_service = initialize_gemini_service(neo4j_manager.driver)
+    
 except ImportError as e:
     st.error(f"Components not available: {e}")
     COMPONENTS_AVAILABLE = False

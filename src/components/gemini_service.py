@@ -12,6 +12,7 @@ Key Features:
 - Temperature control for different tasks
 - Retry logic and error handling
 - Token counting and optimization
+- Aggressive caching and token limits
 """
 
 import time
@@ -20,6 +21,7 @@ import os
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from dotenv import load_dotenv
+from .token_optimizer import get_token_optimizer
 
 # Load environment variables
 load_dotenv()
@@ -32,35 +34,38 @@ class GeminiService:
     in the memory system, each optimized for its specific purpose.
     """
     
-    def __init__(self):
+    def __init__(self, neo4j_driver=None):
         """Initialize the Gemini service with API configuration."""
         # Get API key from environment
         self.api_key = os.getenv("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
         
-        # Model configurations
+        # Initialize token optimizer
+        self.optimizer = get_token_optimizer(neo4j_driver)
+        
+        # Model configurations - using Flash for everything to save costs
         self.query_model_name = "gemini-1.5-flash"
         self.compression_model_name = "gemini-1.5-flash"  
         self.generation_model_name = "gemini-1.5-flash"
         
         # Temperature settings for different tasks
-        self.query_temp = 0.3       # Low temp for query transformation
-        self.compression_temp = 0.1  # Very low temp for compression
-        self.generation_temp = 0.7   # Higher temp for creative responses
+        self.query_temp = 0.2       # Lower temp for query transformation
+        self.compression_temp = 0.0  # Minimal temp for compression
+        self.generation_temp = 0.5   # Reduced temp for responses
         
         # Retry settings
-        self.max_retries = 3
+        self.max_retries = 2  # Reduced from 3 to save quota
         self.retry_delay = 1
         
         self._models = {}  # Cache for model instances
         
         self._configure_api()
         
-        print(f"🔧 Gemini service configured with models:")
-        print(f"   - Query: {self.query_model_name} (temp: {self.query_temp})")
-        print(f"   - Compression: {self.compression_model_name} (temp: {self.compression_temp})")
-        print(f"   - Generation: {self.generation_model_name} (temp: {self.generation_temp})")
+        print(f"🔧 Optimized Gemini service configured:")
+        print(f"   - All models: {self.query_model_name} (Flash for cost efficiency)")
+        print(f"   - Reduced temperatures and retries")
+        print(f"   - Token optimization enabled")
     
     def _configure_api(self):
         """Configure the Google Generative AI API."""
@@ -91,9 +96,9 @@ class GeminiService:
             try:
                 generation_config = genai.types.GenerationConfig(
                     temperature=temperature,
-                    max_output_tokens=8192,  # Generous limit for all tasks
-                    top_p=0.95,
-                    top_k=64
+                    max_output_tokens=1024,  # Aggressively reduced from 2048
+                    top_p=0.9,              # Reduced for more focused responses
+                    top_k=40                # Reduced for faster generation
                 )
                 
                 safety_settings = {
@@ -156,129 +161,63 @@ class GeminiService:
     def transform_query(self, user_query: str, conversation_context: List[Dict[str, Any]] = None) -> str:
         """
         Transform a user query into a clear, self-contained search query.
-        
-        This function takes potentially vague or contextual queries and rewrites
-        them into clear, specific queries suitable for retrieval.
-        
-        Args:
-            user_query: Original user input
-            conversation_context: Recent conversation turns for context
-            
-        Returns:
-            Transformed, clear query string
+        Uses aggressive optimization and caching to minimize API calls.
         """
-        # Prepare conversation context
-        context_str = ""
-        if conversation_context:
-            recent_turns = conversation_context[-3:]  # Last 3 turns for context
-            context_parts = []
-            for turn in recent_turns:
-                if turn.get("user"):
-                    context_parts.append(f"User: {turn['user']}")
-                if turn.get("assistant"):
-                    context_parts.append(f"Assistant: {turn['assistant']}")
-            context_str = "\n".join(context_parts)
+        # Use optimizer to check cache and optimize prompt
+        optimized_prompt, should_skip = self.optimizer.optimize_query_transformation(
+            user_query, conversation_context
+        )
         
-        # Create transformation prompt
-        prompt = f"""You are a query transformation specialist. Your job is to rewrite user queries into clear, self-contained search queries that can effectively retrieve relevant information from a conversation memory database.
-
-TASK: Transform the user's query into a clear, specific search query.
-
-RULES:
-1. Make the query self-contained (no ambiguous references like "it", "that", "the previous discussion")
-2. Expand abbreviations and unclear terms
-3. Add context from recent conversation if needed
-4. Keep the core intent intact
-5. Make it suitable for both semantic and keyword search
-6. Output ONLY the transformed query, no explanations
-
-RECENT CONVERSATION CONTEXT:
-{context_str if context_str else "No recent conversation context available."}
-
-USER QUERY: "{user_query}"
-
-TRANSFORMED QUERY:"""
-
+        # If we should skip transformation, return the result
+        if should_skip:
+            return optimized_prompt
+        
         model = self._get_model(self.query_model_name, self.query_temp)
-        transformed = self._generate_with_retry(model, prompt, "Query Transformation")
+        transformed = self._generate_with_retry(model, optimized_prompt, "Query Transformation")
+        
+        # Cache the result
+        if transformed:
+            cache_content = f"{user_query}|{str(conversation_context) if conversation_context else ''}"
+            self.optimizer.cache_result(cache_content, "query_transform", transformed)
         
         # Fallback to original query if transformation fails
         if not transformed:
             print("⚠️  Query transformation failed, using original query")
             return user_query
         
-        # Clean up the response (remove quotes, extra whitespace)
+        # Clean up the response
         transformed = transformed.strip().strip('"').strip("'")
-        
         print(f"🔄 Query transformed: '{user_query}' → '{transformed}'")
         return transformed
     
     def compress_context(self, retrieved_chunks: List[Dict[str, Any]], 
                         query: str) -> str:
         """
-        Compress retrieved context chunks into a concise summary.
-        
-        This function takes multiple retrieved chunks and creates a coherent,
-        compressed summary that preserves the most relevant information.
-        
-        Args:
-            retrieved_chunks: List of chunks from hybrid retrieval
-            query: The search query for relevance filtering
-            
-        Returns:
-            Compressed context summary
+        Compress retrieved context chunks with aggressive optimization.
         """
-        if not retrieved_chunks:
-            return "No relevant context found."
+        # Use optimizer for caching and optimization
+        optimized_prompt, use_fallback = self.optimizer.optimize_context_compression(
+            retrieved_chunks, query
+        )
         
-        # Prepare chunks for compression
-        chunks_text = []
-        for i, chunk in enumerate(retrieved_chunks, 1):
-            chunk_info = f"[Chunk {i}]"
-            
-            # Add source information
-            if chunk.get("appears_in"):
-                sources = ", ".join(chunk["appears_in"])
-                chunk_info += f" (Sources: {sources})"
-            
-            # Add relevance scores
-            if chunk.get("rrf_score"):
-                chunk_info += f" (Relevance: {chunk['rrf_score']:.3f})"
-            
-            chunk_info += f"\n{chunk['text']}\n"
-            chunks_text.append(chunk_info)
+        # If we should use fallback, return the result directly
+        if use_fallback:
+            return optimized_prompt
         
-        combined_chunks = "\n".join(chunks_text)
-        
-        # Create compression prompt
-        prompt = f"""You are an expert at extractive summarization. Your job is to compress multiple conversation chunks into a concise, coherent summary that preserves the most important information relevant to the user's query.
-
-TASK: Create a compressed summary of the retrieved conversation chunks.
-
-RULES:
-1. Preserve key facts, concepts, and details relevant to the query
-2. Maintain logical flow and coherence
-3. Remove redundant information across chunks
-4. Keep important context like examples, explanations, or specific details
-5. Aim for 2-3 paragraphs maximum
-6. Focus on information that directly relates to the query
-7. Preserve any specific numbers, names, or technical terms
-
-USER QUERY: "{query}"
-
-RETRIEVED CHUNKS:
-{combined_chunks}
-
-COMPRESSED SUMMARY:"""
-
         model = self._get_model(self.compression_model_name, self.compression_temp)
-        compressed = self._generate_with_retry(model, prompt, "Context Compression")
+        compressed = self._generate_with_retry(model, optimized_prompt, "Context Compression")
+        
+        # Cache the result
+        if compressed:
+            chunk_texts = [chunk.get('text', '')[:100] for chunk in retrieved_chunks[:5]]
+            cache_content = f"{query}|{'|'.join(chunk_texts)}"
+            self.optimizer.cache_result(cache_content, "context_compress", compressed)
         
         if not compressed:
-            # Fallback: just concatenate first few chunks
-            print("⚠️  Context compression failed, using fallback")
-            fallback_chunks = retrieved_chunks[:3]
-            return "\n\n".join([chunk["text"] for chunk in fallback_chunks])
+            # Fallback: use simple concatenation of first 2 chunks
+            print("⚠️  Context compression failed, using simple fallback")
+            fallback_chunks = retrieved_chunks[:2]
+            return "\n\n".join([chunk["text"][:500] for chunk in fallback_chunks])
         
         print(f"📝 Compressed {len(retrieved_chunks)} chunks into summary")
         return compressed
@@ -286,55 +225,15 @@ COMPRESSED SUMMARY:"""
     def generate_response(self, user_query: str, compressed_context: str, 
                          conversation_history: List[Dict[str, Any]]) -> str:
         """
-        Generate the final conversational response.
-        
-        This is the main generation function that creates the assistant's
-        response using the compressed context and conversation history.
-        
-        Args:
-            user_query: Original user query
-            compressed_context: Compressed retrieved context
-            conversation_history: Recent conversation turns
-            
-        Returns:
-            Generated response string
+        Generate the final conversational response with minimal token usage.
         """
-        # Prepare conversation history
-        history_str = ""
-        if conversation_history:
-            recent_turns = conversation_history[-5:]  # Last 5 turns for context
-            history_parts = []
-            for turn in recent_turns:
-                if turn.get("user"):
-                    history_parts.append(f"User: {turn['user']}")
-                if turn.get("assistant"):
-                    history_parts.append(f"Assistant: {turn['assistant']}")
-            history_str = "\n".join(history_parts)
+        # Use optimizer to create ultra-compact prompt
+        optimized_prompt = self.optimizer.optimize_response_generation(
+            user_query, compressed_context, conversation_history
+        )
         
-        # Create generation prompt
-        prompt = f"""You are an intelligent and friendly AI assistant with access to conversation memory. You can remember and reference previous discussions to provide helpful, contextual responses.
-
-INSTRUCTIONS:
-1. Answer the user's query using both the recent conversation and retrieved memory context, but don't repeatedly keep telling the user about the previous conversation.
-2. Be conversational, natural, friendly and emotional in tone. Act as a friend of the user.
-3. If the user asks you a question and the context doesn't contain relevant information, say so honestly.
-5. Provide helpful, accurate, and complete responses.
-6. Ask clarifying questions if the query is ambiguous.
-7. Listen and do what the user says. Don't contradict them.
-8. Answer to the point if the query is straightforward.
-
-RECENT CONVERSATION:
-{history_str if history_str else "This is the start of our conversation."}
-
-RETRIEVED MEMORY CONTEXT:
-{compressed_context}
-
-USER QUERY: "{user_query}"
-
-RESPONSE:"""
-
         model = self._get_model(self.generation_model_name, self.generation_temp)
-        response = self._generate_with_retry(model, prompt, "Response Generation")
+        response = self._generate_with_retry(model, optimized_prompt, "Response Generation")
         
         if not response:
             # Fallback response
@@ -365,8 +264,15 @@ RESPONSE:"""
             }
         }
 
-# Create global Gemini service instance
-gemini_service = GeminiService()
+# Global Gemini service instance will be created when Neo4j driver is available
+gemini_service = None
+
+def initialize_gemini_service(neo4j_driver=None):
+    """Initialize global gemini service with Neo4j driver for optimization."""
+    global gemini_service
+    if gemini_service is None:
+        gemini_service = GeminiService(neo4j_driver)
+    return gemini_service
 
 # Example usage and testing
 if __name__ == "__main__":

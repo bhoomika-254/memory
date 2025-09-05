@@ -25,7 +25,7 @@ from collections import defaultdict, Counter
 import os
 
 from src.components.neo4j_manager import Neo4jManager
-from src.components.gemini_service import GeminiService
+from src.components.gemini_service import initialize_gemini_service
 from src.utils.embedding_service import embedding_service
 
 
@@ -40,7 +40,8 @@ class ConversationHistoryManager:
     def __init__(self):
         """Initialize the conversation history manager."""
         self.neo4j_manager = Neo4jManager()
-        self.gemini_service = GeminiService()
+        # Initialize optimized Gemini service
+        self.gemini_service = initialize_gemini_service(self.driver)
         
         print("📚 Conversation History Manager initialized")
     
@@ -545,25 +546,33 @@ class ConversationHistoryManager:
             return []
     
     def _generate_conversation_summary(self, conversation_id: str, messages: List[Dict]) -> str:
-        """Generate a summary of the conversation using Gemini."""
+        """Generate a summary of the conversation using Gemini with aggressive optimization."""
         try:
+            # Check if summary already exists in cache/database
+            cached_summary = self._get_cached_summary(conversation_id)
+            if cached_summary:
+                return cached_summary
+                
             if not messages:
                 return "No messages in conversation"
             
-            # Extract key turns for summarization
+            # Use only first 3 messages to save tokens
             key_messages = []
-            for msg in messages[:10]:  # First 10 messages
+            for msg in messages[:3]:  # Reduced from 10 to 3
                 if msg.get("user_message") and msg.get("assistant_message"):
-                    key_messages.append(f"User: {msg['user_message']}")
-                    key_messages.append(f"Assistant: {msg['assistant_message']}")
+                    # Heavily truncate messages
+                    user_msg = msg['user_message'][:100] + "..." if len(msg['user_message']) > 100 else msg['user_message']
+                    assistant_msg = msg['assistant_message'][:100] + "..." if len(msg['assistant_message']) > 100 else msg['assistant_message']
+                    key_messages.append(f"U: {user_msg}")
+                    key_messages.append(f"A: {assistant_msg}")
             
             if not key_messages:
                 return "Unable to generate summary"
-            
+
             conversation_text = "\n".join(key_messages)
             
-            # Use Gemini to generate summary
-            summary_prompt = f"""Please provide a concise 2-3 sentence summary of this conversation:
+            # Ultra-compact summary prompt
+            summary_prompt = f"""Summarize in 1 sentence:
 
 {conversation_text}
 
@@ -571,17 +580,45 @@ Summary:"""
             
             model = self.gemini_service._get_model(
                 self.gemini_service.compression_model_name, 
-                0.1
+                0.0  # Zero temperature for consistent summaries
             )
             
             summary = self.gemini_service._generate_with_retry(
                 model, summary_prompt, "Conversation Summary"
             )
             
+            # Cache the generated summary
+            if summary:
+                self._cache_summary(conversation_id, summary)
+                
             return summary if summary else "Summary generation failed"
             
         except Exception as e:
             return f"Summary unavailable: {str(e)}"
+    
+    def _get_cached_summary(self, conversation_id: str) -> Optional[str]:
+        """Get cached summary for conversation."""
+        try:
+            query = """
+            MATCH (c:Conversation {conversation_id: $conversation_id})
+            RETURN c.summary as summary
+            """
+            result = self.driver.execute_query(query, conversation_id=conversation_id)
+            records = result.records
+            return records[0]["summary"] if records and records[0]["summary"] else None
+        except:
+            return None
+    
+    def _cache_summary(self, conversation_id: str, summary: str):
+        """Cache summary for conversation."""
+        try:
+            query = """
+            MATCH (c:Conversation {conversation_id: $conversation_id})
+            SET c.summary = $summary
+            """
+            self.driver.execute_query(query, conversation_id=conversation_id, summary=summary)
+        except:
+            pass
     
     def _get_trending_topics(self, days: int) -> List[Dict[str, Any]]:
         """Get trending topics in recent conversations."""

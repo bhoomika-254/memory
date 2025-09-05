@@ -23,7 +23,7 @@ from src.utils.text_chunker import chunker
 
 # Import classes instead of instances to avoid dependency issues
 try:
-    from src.components.gemini_service import GeminiService
+    from src.components.gemini_service import initialize_gemini_service
     from src.components.graph_retrieval import GraphRetrieval
     from src.components.neo4j_manager import Neo4jManager
     from src.components.conversation_history_manager import ConversationHistoryManager
@@ -88,7 +88,8 @@ class MemoryOrchestrator:
             raise ImportError("Required components not available")
         
         try:
-            self.gemini_service = GeminiService()
+            # Initialize optimized Gemini service with Neo4j driver for caching
+            self.gemini_service = initialize_gemini_service(self.neo4j_manager.driver)
             self.neo4j_manager = Neo4jManager()
             self.graph_retrieval = GraphRetrieval()
             self.history_manager = ConversationHistoryManager()
@@ -275,18 +276,21 @@ class MemoryOrchestrator:
         try:
             print("🔄 Transforming query...")
             
-            # Get recent conversation context
-            recent_messages = state["messages"][-6:]  # Last 6 messages (3 turns)
+            # Get recent conversation context (optimized for tokens)
+            recent_messages = state["messages"][-4:]  # Reduced from 6 to 4 messages
             conversation_context = []
             
             for i in range(0, len(recent_messages), 2):
                 if i + 1 < len(recent_messages):
+                    # Truncate messages for token savings
+                    user_msg = recent_messages[i].get("content", "")[:200]
+                    assistant_msg = recent_messages[i + 1].get("content", "")[:200]
                     conversation_context.append({
-                        "user": recent_messages[i].get("content", ""),
-                        "assistant": recent_messages[i + 1].get("content", "")
+                        "user": user_msg,
+                        "assistant": assistant_msg
                     })
             
-            # Transform the query
+            # Transform the query (with caching and smart skipping)
             transformed = self.gemini_service.transform_query(
                 state["current_query"],
                 conversation_context
@@ -428,15 +432,18 @@ class MemoryOrchestrator:
         try:
             print("💬 Generating response...")
             
-            # Prepare conversation history
+            # Prepare conversation history (optimized for tokens)
             conversation_history = []
-            recent_messages = state["messages"][-10:]  # Last 10 messages
+            recent_messages = state["messages"][-4:]  # Reduced from 10 to 4 messages
             
             for i in range(0, len(recent_messages), 2):
                 if i + 1 < len(recent_messages):
+                    # Truncate messages for token savings
+                    user_msg = recent_messages[i].get("content", "")[:150]
+                    assistant_msg = recent_messages[i + 1].get("content", "")[:150]
                     conversation_history.append({
-                        "user": recent_messages[i].get("content", ""),
-                        "assistant": recent_messages[i + 1].get("content", "")
+                        "user": user_msg,
+                        "assistant": assistant_msg
                     })
             
             # Generate response
