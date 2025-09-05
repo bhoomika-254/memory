@@ -47,7 +47,6 @@ venv.bak/
 .ipynb_checkpoints
 
 # Database and Index Files
-whoosh_index/
 *.db
 *.sqlite
 *.sqlite3

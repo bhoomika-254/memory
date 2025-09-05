@@ -44,7 +44,6 @@ except ImportError as e:
 try:
     from src.components.gemini_service import gemini_service
     from src.components.neo4j_manager import Neo4jManager
-    from src.components.conversation_history_manager import ConversationHistoryManager
     COMPONENTS_AVAILABLE = True
 except ImportError as e:
     st.error(f"Components not available: {e}")
@@ -63,16 +62,6 @@ class MemoryUI:
         """Initialize the UI with session state management."""
         self._initialize_session_state()
         
-        # Initialize history manager if available
-        try:
-            if COMPONENTS_AVAILABLE:
-                self.history_manager = ConversationHistoryManager()
-            else:
-                self.history_manager = None
-        except Exception as e:
-            st.error(f"Failed to initialize history manager: {e}")
-            self.history_manager = None
-        
     def _initialize_session_state(self):
         """Initialize Streamlit session state variables."""
         # Core conversation state
@@ -82,29 +71,11 @@ class MemoryUI:
         if "messages" not in st.session_state:
             st.session_state.messages = []
         
-        # UI state
-        if "show_debug" not in st.session_state:
-            st.session_state.show_debug = False
-        
-        if "show_retrieved_context" not in st.session_state:
-            st.session_state.show_retrieved_context = False
+        # UI state (removed debug and context features)
         
         # System status
         if "system_status" not in st.session_state:
             st.session_state.system_status = {}
-        
-        # History UI state
-        if "show_history" not in st.session_state:
-            st.session_state.show_history = False
-            
-        if "selected_conversation" not in st.session_state:
-            st.session_state.selected_conversation = None
-            
-        if "history_search_query" not in st.session_state:
-            st.session_state.history_search_query = ""
-            
-        if "show_analytics" not in st.session_state:
-            st.session_state.show_analytics = False
     
     def render_header(self):
         """Render the application header with title and description."""
@@ -117,7 +88,7 @@ class MemoryUI:
         """)
         
         # Add system status indicator
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2 = st.columns([3, 1])
         
         with col1:
             st.markdown(f"**Conversation ID:** `{st.session_state.conversation_id[:8]}...`")
@@ -125,10 +96,6 @@ class MemoryUI:
         with col2:
             if st.button("🆕 New Chat"):
                 self._start_new_conversation()
-        
-        with col3:
-            if st.button("📚 History"):
-                st.session_state.show_history = not st.session_state.show_history
     
     def render_sidebar(self):
         """Render the sidebar with controls and system information."""
@@ -136,16 +103,13 @@ class MemoryUI:
             st.header("🎛️ Controls")
             
             # Navigation tabs
-            tab1, tab2, tab3 = st.tabs(["⚙️ Settings", "📚 History", "📊 Analytics"])
+            tab1, tab2 = st.tabs(["⚙️ Settings", "📚 History"])
             
             with tab1:
                 self._render_settings_tab()
-            
+                
             with tab2:
                 self._render_history_tab()
-                
-            with tab3:
-                self._render_analytics_tab()
     
     def _render_system_info(self):
         """Render system status information in the sidebar."""
@@ -187,18 +151,6 @@ class MemoryUI:
     
     def _render_settings_tab(self):
         """Render the settings tab in sidebar."""
-        st.session_state.show_retrieved_context = st.checkbox(
-            "Show retrieved context",
-            value=st.session_state.show_retrieved_context,
-            help="Display the context retrieved from memory (for debugging)"
-        )
-        
-        st.session_state.show_debug = st.checkbox(
-            "Show debug info",
-            value=st.session_state.show_debug,
-            help="Show debug information and system status"
-        )
-        
         st.divider()
         
         # System information
@@ -207,299 +159,101 @@ class MemoryUI:
     
     def _render_history_tab(self):
         """Render the conversation history tab."""
-        if not self.history_manager:
-            st.error("History manager not available")
-            return
-        
         try:
-            # Search conversations
-            search_query = st.text_input(
-                "🔍 Search conversations",
-                value=st.session_state.history_search_query,
-                placeholder="Search through your conversation history..."
-            )
+            # Create temporary history manager for history
+            from src.components.conversation_history_manager import ConversationHistoryManager
+            history_manager = ConversationHistoryManager()
             
-            if search_query != st.session_state.history_search_query:
-                st.session_state.history_search_query = search_query
-                st.rerun()
+            st.subheader("📚 Conversation History")
             
-            # Date filters
-            col1, col2 = st.columns(2)
-            with col1:
-                date_from = st.date_input("From date", value=None)
-            with col2:
-                date_to = st.date_input("To date", value=None)
+            # Get all conversations
+            with st.spinner("Loading conversations..."):
+                conversations = history_manager.get_all_conversations(limit=50)
             
-            # Get conversations
-            if search_query:
-                conversations = self.history_manager.search_conversations(
-                    query=search_query,
-                    date_from=date_from.isoformat() if date_from else None,
-                    date_to=date_to.isoformat() if date_to else None,
-                    limit=20
-                )
-                st.write(f"🔍 Found {len(conversations)} matching conversations")
-            else:
-                conversations = self.history_manager.get_all_conversations(limit=20)
-                st.write(f"📚 Recent conversations ({len(conversations)})")
-            
-            # Display conversations
-            for conv in conversations:
-                with st.expander(f"💬 {conv.get('preview', 'No preview')[:50]}..."):
-                    if 'conversation_id' in conv:
-                        col1, col2, col3 = st.columns([2, 1, 1])
+            if conversations:
+                st.write(f"Found {len(conversations)} conversations")
+                
+                # Display conversations
+                for conv in conversations:
+                    with st.container():
+                        # Create columns for conversation info, go to chat button, and delete button
+                        col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
-                            st.write(f"**ID:** `{conv['conversation_id'][:8]}...`")
-                            if 'topics' in conv:
-                                topics = ", ".join(conv['topics'][:3])
-                                st.write(f"**Topics:** {topics}")
+                            # Conversation preview
+                            conv_id_short = conv['conversation_id'][:8]
+                            st.write(f"**ID:** {conv_id_short}...")
+                            st.write(f"**Messages:** {conv['message_count']}")
+                            st.write(f"**Last:** {conv['last_message'][:19] if len(conv['last_message']) > 19 else conv['last_message']}")
+                            
+                            # Show preview if available
+                            if conv.get('preview'):
+                                st.write(f"**Preview:** {conv['preview'][:100]}...")
                         
                         with col2:
-                            if 'total_turns' in conv:
-                                st.metric("Turns", conv['total_turns'])
-                            if 'message_count' in conv:
-                                st.metric("Messages", conv['message_count'])
+                            # Go to chat button
+                            if st.button(f"💬 Open", key=f"open_{conv['conversation_id']}"):
+                                self._load_conversation(conv['conversation_id'])
+                                st.rerun()
                         
                         with col3:
-                            if st.button("👁️ View", key=f"view_{conv['conversation_id']}"):
-                                st.session_state.selected_conversation = conv['conversation_id']
-                                st.rerun()
-                            
-                            if st.button("🗑️ Delete", key=f"del_{conv['conversation_id']}"):
-                                if self.history_manager.delete_conversation(conv['conversation_id']):
-                                    st.success("Conversation deleted!")
-                                    st.rerun()
-                    else:
-                        # This is a search result
-                        st.write(f"**Text:** {conv.get('text', '')[:200]}...")
-                        st.write(f"**Timestamp:** {conv.get('timestamp', 'Unknown')}")
-                        st.write(f"**Relevance:** {conv.get('relevance_score', 0):.3f}")
-            
-            # Export functionality
-            st.divider()
-            st.subheader("📤 Export Data")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                export_format = st.selectbox("Format", ["json", "csv"])
-            with col2:
-                include_embeddings = st.checkbox("Include embeddings")
-            
-            if st.button("📤 Export All Conversations"):
-                with st.spinner("Exporting conversations..."):
-                    filepath = self.history_manager.export_conversation_data(
-                        format_type=export_format,
-                        include_embeddings=include_embeddings
-                    )
-                    if filepath:
-                        st.success(f"✅ Exported to: `{filepath}`")
-                    else:
-                        st.error("❌ Export failed")
-        
-        except Exception as e:
-            st.error(f"Error in history tab: {str(e)}")
-    
-    def _render_analytics_tab(self):
-        """Render the analytics tab."""
-        if not self.history_manager:
-            st.error("Analytics not available")
-            return
-        
-        try:
-            # Analytics period selector
-            period_days = st.selectbox(
-                "📊 Analytics Period",
-                [7, 14, 30, 90],
-                index=2,  # Default to 30 days
-                format_func=lambda x: f"Last {x} days"
-            )
-            
-            # Get analytics
-            with st.spinner("Loading analytics..."):
-                analytics = self.history_manager.get_conversation_analytics(days=period_days)
-            
-            if analytics:
-                # Key metrics
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric(
-                        "Total Conversations",
-                        analytics.get('total_conversations', 0)
-                    )
-                
-                with col2:
-                    st.metric(
-                        "Total Messages",
-                        analytics.get('total_messages', 0)
-                    )
-                
-                with col3:
-                    st.metric(
-                        "Avg Turns/Conv",
-                        analytics.get('avg_turns_per_conversation', 0)
-                    )
-                
-                # Daily activity chart
-                daily_activity = analytics.get('daily_activity', [])
-                if daily_activity:
-                    st.subheader("📈 Daily Activity")
-                    
-                    # Create a simple chart using Streamlit's built-in charting
-                    import pandas as pd
-                    df = pd.DataFrame(daily_activity)
-                    if not df.empty:
-                        df['date'] = pd.to_datetime(df['date'])
-                        df = df.set_index('date')
-                        st.line_chart(df['message_count'])
-                
-                # Trending topics
-                trending_topics = analytics.get('trending_topics', [])
-                if trending_topics:
-                    st.subheader("🔥 Trending Topics")
-                    
-                    for topic in trending_topics[:5]:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"**{topic['topic'].title()}**")
-                        with col2:
-                            st.write(f"{topic['conversation_count']} convs ({topic['percentage']}%)")
+                            # Delete button
+                            if st.button(f"🗑️ Delete", key=f"del_{conv['conversation_id']}"):
+                                # Confirm deletion
+                                if st.session_state.get(f"confirm_delete_{conv['conversation_id']}", False):
+                                    # Actually delete the conversation
+                                    try:
+                                        if history_manager.delete_conversation(conv['conversation_id']):
+                                            st.success(f"Deleted conversation {conv_id_short}")
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to delete conversation")
+                                    except Exception as e:
+                                        st.error(f"Error deleting: {str(e)}")
+                                else:
+                                    # Set confirmation flag
+                                    st.session_state[f"confirm_delete_{conv['conversation_id']}"] = True
+                                    st.warning(f"Click delete again to confirm deletion of {conv_id_short}")
+                        
+                        st.divider()
             
             else:
-                st.info("No analytics data available")
-        
-        except Exception as e:
-            st.error(f"Error loading analytics: {str(e)}")
-    
-    def _render_conversation_view(self):
-        """Render detailed view of a selected conversation."""
-        if not self.history_manager:
-            st.error("History manager not available")
-            return
-        
-        try:
-            # Header with back button
-            col1, col2 = st.columns([1, 4])
+                st.info("No conversation history found")
             
-            with col1:
-                if st.button("← Back"):
-                    st.session_state.selected_conversation = None
-                    st.rerun()
-            
-            with col2:
-                st.subheader(f"💬 Conversation Details")
-            
-            # Get conversation details
-            with st.spinner("Loading conversation..."):
-                conv_details = self.history_manager.get_conversation_details(
-                    st.session_state.selected_conversation
-                )
-            
-            if not conv_details:
-                st.error("Could not load conversation details")
-                return
-            
-            # Conversation metadata
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Turns", conv_details.get('total_turns', 0))
-            
-            with col2:
-                st.metric("Total Messages", conv_details.get('total_messages', 0))
-            
-            with col3:
-                if conv_details.get('start_time'):
-                    start_date = conv_details['start_time'][:10]  # Extract date
-                    st.metric("Start Date", start_date)
-            
-            with col4:
-                topics = conv_details.get('topics', [])
-                if topics:
-                    st.metric("Topics", len(topics))
-            
-            # Conversation summary
-            if conv_details.get('summary'):
-                st.subheader("📝 Summary")
-                st.write(conv_details['summary'])
-            
-            # Topics
-            if topics:
-                st.subheader("🏷️ Topics")
-                topic_cols = st.columns(min(len(topics), 3))
-                for i, topic in enumerate(topics[:3]):
-                    with topic_cols[i]:
-                        st.info(f"#{topic}")
-            
-            st.divider()
-            
-            # Conversation turns
-            st.subheader("💬 Conversation")
-            
-            turns_data = conv_details.get('turns', {})
-            if turns_data:
-                for turn_num in sorted(turns_data.keys()):
-                    turn_messages = turns_data[turn_num]
-                    
-                    # Get the full turn data
-                    user_msg = ""
-                    assistant_msg = ""
-                    
-                    for msg in turn_messages:
-                        if msg.get('user_message'):
-                            user_msg = msg['user_message']
-                        if msg.get('assistant_message'):
-                            assistant_msg = msg['assistant_message']
-                    
-                    if user_msg or assistant_msg:
-                        with st.expander(f"Turn {turn_num}", expanded=True):
-                            if user_msg:
-                                with st.chat_message("user"):
-                                    st.write(user_msg)
-                            
-                            if assistant_msg:
-                                with st.chat_message("assistant"):
-                                    st.write(assistant_msg)
-            
-            # Export this conversation
-            st.divider()
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("📤 Export This Conversation"):
-                    filepath = self.history_manager.export_conversation_data(
-                        conversation_ids=[st.session_state.selected_conversation],
-                        format_type="json"
-                    )
-                    if filepath:
-                        st.success(f"✅ Exported to: `{filepath}`")
-            
-            with col2:
-                if st.button("🗑️ Delete This Conversation"):
-                    if st.button("⚠️ Confirm Delete", type="secondary"):
-                        if self.history_manager.delete_conversation(st.session_state.selected_conversation):
-                            st.success("Conversation deleted!")
-                            st.session_state.selected_conversation = None
+            # Clear all conversations button
+            if conversations:
+                st.divider()
+                if st.button("🧹 Clear All History", type="secondary"):
+                    if st.session_state.get("confirm_clear_all", False):
+                        # Clear all conversations
+                        try:
+                            deleted_count = 0
+                            for conv in conversations:
+                                if history_manager.delete_conversation(conv['conversation_id']):
+                                    deleted_count += 1
+                            st.success(f"Cleared {deleted_count} conversations")
                             st.rerun()
+                        except Exception as e:
+                            st.error(f"Error clearing history: {str(e)}")
+                    else:
+                        st.session_state["confirm_clear_all"] = True
+                        st.warning("Click again to confirm clearing ALL conversation history")
+            
+            history_manager.close()
         
         except Exception as e:
-            st.error(f"Error rendering conversation view: {str(e)}")
+            st.error(f"Error loading history: {str(e)}")
     
     def render_chat_interface(self):
         """Render the main chat interface."""
-        # Check if viewing a specific conversation
-        if st.session_state.selected_conversation:
-            self._render_conversation_view()
-        else:
-            # Display conversation history
-            self._display_conversation_history()
-            
-            # Chat input
-            user_input = st.chat_input("Ask me anything... I'll remember our conversation!")
-            
-            if user_input:
-                self._process_user_input(user_input)
+        # Display conversation history
+        self._display_conversation_history()
+        
+        # Chat input
+        user_input = st.chat_input("Ask me anything... I'll remember our conversation!")
+        
+        if user_input:
+            self._process_user_input(user_input)
     
     def _display_conversation_history(self):
         """Display the conversation history with messages."""
@@ -507,18 +261,6 @@ class MemoryUI:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
-                
-                # Show metadata for assistant messages if debug is enabled
-                if (message["role"] == "assistant" and 
-                    st.session_state.show_debug and 
-                    "metadata" in message):
-                    
-                    with st.expander("🔍 Debug Information"):
-                        self._display_message_metadata(message["metadata"])
-    
-    def _display_message_metadata(self, metadata: Dict[str, Any]):
-        """Display debug metadata for a message."""
-        st.json(metadata)
     
     def _process_user_input(self, user_input: str):
         """Process user input and generate response."""
@@ -550,23 +292,6 @@ class MemoryUI:
                     # Display the response
                     response_text = response_data["response"]
                     st.markdown(response_text)
-                    
-                    # Show retrieved context if enabled
-                    if (st.session_state.show_retrieved_context and 
-                        response_data.get("retrieved_chunks", 0) > 0):
-                        
-                        with st.expander(f"📚 Retrieved Context ({response_data['retrieved_chunks']} chunks)"):
-                            # Get the actual retrieved context from the orchestrator state
-                            conversation_state = memory_orchestrator.get_conversation_state(st.session_state.conversation_id)
-                            if conversation_state and conversation_state.get("retrieved_context"):
-                                for i, chunk in enumerate(conversation_state["retrieved_context"], 1):
-                                    st.markdown(f"**Chunk {i}** (Score: {chunk.get('rrf_score', 0):.3f})")
-                                    st.markdown(f"```\n{chunk['text']}\n```")
-                    
-                    # Show processing information if debug is enabled
-                    if st.session_state.show_debug:
-                        with st.expander("🔧 Processing Details"):
-                            st.json(response_data)
                     
                     # Add assistant message to chat history
                     assistant_message = {
@@ -600,107 +325,49 @@ class MemoryUI:
         st.success("🆕 Started new chat! I can still remember our previous conversations.")
         st.rerun()
     
-    def render_debug_panel(self):
-        """Render debug information panel if enabled."""
-        if st.session_state.show_debug:
-            st.subheader("🔧 Debug Information")
-            
-            with st.expander("System Status", expanded=True):
-                if not COMPONENTS_AVAILABLE or not MEMORY_ORCHESTRATOR_AVAILABLE:
-                    st.error("❌ System components not fully available")
-                    return
-                    
-                try:
-                    # Get comprehensive system status
-                    status = {
-                        "conversation_id": st.session_state.conversation_id,
-                        "session_messages": len(st.session_state.messages),
-                        "gemini_service": gemini_service.get_service_status(),
-                        "neo4j_available": True  # Neo4j status checked via connection test
-                    }
-                    
-                    # Get orchestrator state
-                    conversation_state = memory_orchestrator.get_conversation_state(st.session_state.conversation_id)
-                    if conversation_state:
-                        status["orchestrator_state"] = {
-                            "turn_number": conversation_state.get("turn_number"),
-                            "tools_used": conversation_state.get("tools_used", []),
-                            "errors": conversation_state.get("errors", [])
-                        }
-                    
-                    st.json(status)
-                    
-                except Exception as e:
-                    st.error(f"Error generating debug info: {str(e)}")
-        
-        # History panel
-        if st.session_state.show_history:
-            self._render_history_panel()
-    
-    def _render_history_panel(self):
-        """Render the history panel in main area."""
-        st.subheader("📚 Conversation History")
-        
-        if not self.history_manager:
-            st.error("History manager not available")
-            return
-        
+    def _load_conversation(self, conversation_id: str):
+        """Load a specific conversation and its messages into the current session."""
         try:
-            # Quick search
-            search_col, filter_col = st.columns([3, 1])
+            # Create temporary history manager to get conversation details
+            from src.components.conversation_history_manager import ConversationHistoryManager
+            history_manager = ConversationHistoryManager()
             
-            with search_col:
-                quick_search = st.text_input(
-                    "🔍 Quick search",
-                    placeholder="Search conversations..."
-                )
+            # Get conversation details
+            conv_details = history_manager.get_conversation_details(conversation_id)
             
-            with filter_col:
-                time_filter = st.selectbox(
-                    "Time",
-                    ["All time", "Last 7 days", "Last 30 days", "Last 90 days"]
-                )
-            
-            # Get conversations based on search
-            if quick_search:
-                conversations = self.history_manager.search_conversations(
-                    query=quick_search,
-                    limit=10
-                )
+            if conv_details and conv_details.get('turns'):
+                # Update session state
+                st.session_state.conversation_id = conversation_id
+                st.session_state.messages = []
+                
+                # Load messages in the correct format for Streamlit chat
+                # Sort turns by turn number
+                sorted_turns = sorted(conv_details['turns'].items(), key=lambda x: int(x[0]))
+                
+                for turn_number, turn_messages in sorted_turns:
+                    # Get the first message from this turn (it should contain both user and assistant messages)
+                    if turn_messages:
+                        turn_msg = turn_messages[0]  # Take first chunk of the turn
+                        
+                        if turn_msg.get('user_message'):
+                            st.session_state.messages.append({
+                                "role": "user", 
+                                "content": turn_msg['user_message']
+                            })
+                        if turn_msg.get('assistant_message'):
+                            st.session_state.messages.append({
+                                "role": "assistant", 
+                                "content": turn_msg['assistant_message']
+                            })
+                
+                st.success(f"📂 Loaded conversation {conversation_id[:8]}... ({conv_details['total_turns']} turns)")
             else:
-                conversations = self.history_manager.get_all_conversations(limit=10)
+                st.warning("No messages found for this conversation")
             
-            # Display in a more compact format
-            for i, conv in enumerate(conversations):
-                col1, col2, col3 = st.columns([3, 1, 1])
-                
-                with col1:
-                    preview = conv.get('preview', 'No preview')
-                    st.write(f"**{preview[:60]}...**")
-                    
-                    if 'topics' in conv and conv['topics']:
-                        topics_str = " • ".join([f"#{topic}" for topic in conv['topics'][:2]])
-                        st.caption(topics_str)
-                
-                with col2:
-                    if 'last_message' in conv:
-                        date_str = conv['last_message'][:10]  # Extract date
-                        st.caption(f"📅 {date_str}")
-                    
-                    if 'total_turns' in conv:
-                        st.caption(f"💬 {conv['total_turns']} turns")
-                
-                with col3:
-                    if st.button("View", key=f"hist_view_{i}"):
-                        st.session_state.selected_conversation = conv.get('conversation_id')
-                        st.session_state.show_history = False
-                        st.rerun()
+            history_manager.close()
             
-            if not conversations:
-                st.info("No conversations found")
-        
         except Exception as e:
-            st.error(f"Error in history panel: {str(e)}")
+            st.error(f"Error loading conversation: {str(e)}")
     
     def run(self):
         """Main method to run the Streamlit application."""
@@ -709,7 +376,6 @@ class MemoryUI:
             self.render_header()
             self.render_sidebar()
             self.render_chat_interface()
-            self.render_debug_panel()
             
         except Exception as e:
             st.error(f"Application error: {str(e)}")

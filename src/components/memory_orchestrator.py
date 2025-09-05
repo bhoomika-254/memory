@@ -622,15 +622,19 @@ class MemoryOrchestrator:
         Returns:
             True if successful
         """
-        # Clear from active memory
-        self.clear_conversation(conversation_id)
-        
-        # TODO: Implement Neo4j conversation clearing
-        # For now, just clear active memory
-        print(f"🧹 Cleared active memory for conversation: {conversation_id}")
-        print("⚠️  Note: Neo4j conversation clearing not yet implemented")
-        
-        return True
+        try:
+            # Clear from active memory
+            self.clear_conversation(conversation_id)
+            
+            # Clear from Neo4j database
+            self.neo4j_manager.clear_conversation(conversation_id)
+            
+            print(f"🧹 Cleared all memory for conversation: {conversation_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error clearing conversation memory: {str(e)}")
+            return False
     
     def get_conversation_summary(self, conversation_id: str) -> Dict[str, Any]:
         """

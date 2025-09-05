@@ -1,6 +1,6 @@
 # Memory-Enhanced AI System
 
-A sophisticated 8-layer conversational AI system with vector memory and retrieval augmentation.
+A sophisticated conversational AI system with Neo4j graph memory and intelligent retrieval augmentation.
 
 ## Quick Setup
 
@@ -15,22 +15,26 @@ pip install -r requirements.txt
 1. Create a `.env` file in the root directory:
 ```
 GEMINI_API_KEY=your_google_gemini_api_key_here
+NEO4J_URI=neo4j+s://your-neo4j-instance.databases.neo4j.io
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your_neo4j_password
 ```
 
 2. Get your Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+3. Set up a Neo4j AuraDB instance at [Neo4j Aura](https://console.neo4j.io/)
 
 ### Step 3: Test Database Setup
 
-Run the setup script to test all components:
+You can test your setup by running the main application:
 ```bash
-python setup_databases.py
+streamlit run app.py
 ```
 
 This will:
-- Test Qdrant vector database (uses in-memory mode by default)
-- Test Whoosh search engine (creates local index files)
-- Verify Gemini API connection
-- Test the complete orchestrator
+- Test Neo4j graph database connection
+- Verify embedding service functionality
+- Test Gemini API connection
+- Validate the complete system
 
 ### Step 4: Launch the Application
 
@@ -42,21 +46,17 @@ The application will be available at `http://localhost:8501`
 
 ## Database Configuration
 
-### Qdrant Vector Database
-- **Default**: In-memory mode (no setup required)
-- **Production**: Install Docker and run `docker run -p 6333:6333 qdrant/qdrant`
-- The system automatically falls back to in-memory if server unavailable
-
-### Whoosh Search Engine
-- **Automatic**: Creates `whoosh_index/` directory automatically
-- **No setup required**: File-based search works out of the box
+### Neo4j Graph Database
+- **Production**: Use Neo4j AuraDB (cloud) for best performance
+- **Local**: Install Neo4j Desktop for local development  
+- The system uses vector indexing, fulltext indexing, and graph traversal
 
 ## Architecture
 
 ### Prerequisites
 - Python 3.8+
-- Docker (for Qdrant)
 - Google Gemini API key
+- Neo4j database (AuraDB recommended)
 
 ### Quick Setup
 
@@ -64,58 +64,23 @@ The application will be available at `http://localhost:8501`
    ```bash
    git clone <your-repo-url>
    cd memory
-   python setup.py
    ```
 
-2. **Configure API key**:
-   - Edit `.env` file
-   - Add your Gemini API key: `GEMINI_API_KEY=your_key_here`
-   - Get API key from: https://makersuite.google.com/app/apikey
+2. **Configure environment**:
+   - Create `.env` file with required API keys and database credentials
+   - See environment setup section above for details
 
 3. **Start the application**:
    ```bash
-   # Option 1: Use the convenient startup script
-   run.bat           # Windows
-   ./run.sh          # Unix/Linux/MacOS
-   
-   # Option 2: Manual startup
+   # Create virtual environment
+   python -m venv venv
    venv\Scripts\activate     # Windows
    source venv/bin/activate  # Unix/Linux/MacOS
-   streamlit run app.py
-   ```
-
-### Manual Installation
-
-1. **Create virtual environment**:
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate  # Windows
-   source venv/bin/activate  # Unix/Linux/MacOS
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Start Qdrant**:
-   ```bash
-   docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
-   ```
-
-4. **Configure environment**:
-   ```bash
-   # Create .env file with your Gemini API key
-   echo "GEMINI_API_KEY=your_api_key_here" > .env
-   ```
-
-5. **Run the application**:
-   ```bash
-   # Option 1: Use startup script
-   run.bat           # Windows
-   ./run.sh          # Unix/Linux/MacOS
    
-   # Option 2: Direct command
+   # Install dependencies
+   pip install -r requirements.txt
+   
+   # Run the application
    streamlit run app.py
    ```
 
@@ -132,20 +97,11 @@ The application will be available at `http://localhost:8501`
 - **🗑️ Clear Chat**: Removes current session but keeps stored memories
 - **🧹 Clear Memory**: Completely wipes all stored memories for the conversation
 - **🆕 New Conversation**: Starts fresh but can still access previous memories
-- **📚 History**: Access comprehensive conversation history and analytics
 
-### Advanced History Features
-- **📋 Conversation List**: View all past conversations with previews and metadata
-- **🔍 Search**: Full-text search across all conversation history
-- **📊 Analytics**: Detailed statistics and trending topics analysis
-- **📤 Export/Import**: Backup and restore conversation data (JSON/CSV formats)
-- **🏷️ Topic Organization**: Automatic topic extraction and categorization
-- **📅 Timeline View**: Browse conversations by date and time periods
-
-### Advanced Features
-- **Debug Mode**: Toggle to see retrieval details and processing information
-- **Retrieved Context**: View the specific memory chunks used for each response
-- **System Status**: Monitor database connections and memory statistics
+### Analytics Features
+- **� Basic Analytics**: View conversation statistics and activity patterns
+- **� Activity Charts**: Visual representation of conversation trends
+- **� Trending Topics**: See most discussed topics from your conversations
 - **Conversation History**: Browse, search, and analyze past conversations
 - **Data Management**: Export conversations for backup or analysis
 - **Topic Analytics**: Track conversation themes and trending topics
@@ -218,27 +174,8 @@ WHOOSH_INDEX_DIR=data/whoosh_index
 
 ## 🛠️ Development
 
-### Data Management
-
-The system includes a comprehensive data management utility:
-
+### Running Tests
 ```bash
-# Export conversations from last 30 days
-python data_manager.py export --format json --days 30
-
-# Generate analytics report
-python data_manager.py analytics --days 7
-
-# Import conversations from backup
-python data_manager.py import --file backup.json
-
-# Clean up old conversations (older than 90 days)
-python data_manager.py cleanup --older-than 90
-
-# Test database connections
-python data_manager.py test
-```
-
 ### Running Tests
 ```bash
 # Test individual components
@@ -248,17 +185,10 @@ python -m src.components.conversation_history_manager
 ```
 
 ### Adding New Features
-1. **New Retrieval Method**: Extend `retrieval_fusion.py`
-2. **Different LLM**: Modify `gemini_service.py`
+1. **New Retrieval Method**: Extend `graph_retrieval.py`
+2. **Different LLM**: Modify `gemini_service.py` 
 3. **UI Enhancements**: Update `app.py`
-4. **Configuration**: Add settings to `config.py`
-
-### Debugging
-- Enable debug mode in the UI to see:
-  - Retrieved context chunks
-  - Processing metadata
-  - System status information
-  - Error details
+4. **Database Schema**: Modify Neo4j constraints and indexes
 
 ## 🔧 Troubleshooting
 
@@ -268,30 +198,31 @@ python -m src.components.conversation_history_manager
 - Run `pip install -r requirements.txt`
 - Ensure virtual environment is activated
 
-**"Qdrant connection failed"**
-- Check if Docker is running: `docker ps`
-- Start Qdrant: `docker run -d --name qdrant -p 6333:6333 qdrant/qdrant`
+**"Neo4j connection failed"**
+- Check database URI and credentials in `.env`
+- Verify Neo4j instance is running
+- Test connection by launching the Streamlit app
 
 **"Gemini API errors"**
 - Verify API key in `.env` file
-- Check quota limits at https://makersuite.google.com/
+- Check quota limits at https://aistudio.google.com/
 
 **"No memories found"**
 - Have a few conversations first to build memory
-- Check system status in sidebar for database statistics
+- Check system status in analytics for database statistics
 
 ### Performance Tips
 - **Large Conversations**: System automatically manages memory chunks
-- **Slow Responses**: Reduce retrieval top_k values in config
-- **Memory Usage**: Clear old conversations periodically
+- **Slow Responses**: Reduce retrieval limit values in search functions
+- **Memory Usage**: Clear old conversations using the analytics panel
 
 ## 📊 System Metrics
 
-The system tracks various metrics visible in the debug panel:
-- **Memory Storage**: Number of chunks stored per conversation
-- **Retrieval Performance**: Semantic vs lexical match rates
-- **Processing Time**: Time spent in each system component
-- **Error Rates**: Failed operations and retry statistics
+The system tracks various metrics visible in the analytics panel:
+- **Memory Storage**: Number of messages and conversations stored
+- **Daily Activity**: Message count trends over time
+- **Trending Topics**: Most discussed conversation topics
+- **Processing Performance**: Response time and system health
 
 ## 🤝 Contributing
 
@@ -307,19 +238,19 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🙏 Acknowledgments
 
 - **Google Gemini**: For powerful LLM capabilities
-- **Qdrant**: For efficient vector database operations
-- **Whoosh**: For lexical search functionality
+- **Neo4j**: For robust graph database and vector indexing
 - **LangGraph**: For conversation orchestration
 - **Streamlit**: For beautiful and interactive UI
+- **Sentence Transformers**: For high-quality text embeddings
 
 ## 📞 Support
 
 For questions or issues:
 1. Check the troubleshooting section above
-2. Review system status in the UI debug panel
+2. Review system status in the analytics panel
 3. Open an issue on GitHub with detailed information
 
 ---
 
 **Happy conversing with your memory-enhanced AI! 🧠✨**
-refined and advanced memory architecture for human like conversations
+*Advanced graph-based memory architecture for human-like conversations*
