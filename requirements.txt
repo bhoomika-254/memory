@@ -6,11 +6,11 @@ langgraph>=0.2.0
 langchain>=0.2.0
 langchain-core>=0.2.0
 
-# Google Gemini LLM
-google-generativeai>=0.3.2
+# Azure OpenAI LLM
+openai>=1.50.0
 
-# Graph Database (Neo4j) - replaces Qdrant + Whoosh
-neo4j==5.28.2
+# Graph Database (Neo4j)
+neo4j>=5.28.0
 
 # Embeddings
 sentence-transformers>=2.2.2
@@ -25,4 +25,4 @@ rank-bm25>=0.2.2
 # Data handling
 pandas>=2.1.4
 numpy>=1.24.3
-plotly>=5.17.0  # For advanced charts in analytics
+plotly>=5.17.0

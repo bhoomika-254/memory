@@ -1,15 +1,20 @@
 """
-Graph-Based Retrieval System for Memory.
+Streamlined Graph-Based Retrieval System for Memory.
 
-This module replaces the previous Qdrant + Whoosh system with a unified
-Neo4j graph database approach, implementing the LightRAG methodology.
+This module implements a high-performance Neo4j graph database approach 
+optimized for speed and simplicity.
 
 Key Features:
-- Semantic similarity search using vector embeddings
-- Fulltext keyword search using Neo4j's built-in indexing
-- Graph traversal for contextual relationship discovery
-- Reciprocal Rank Fusion (RRF) for result combination
+- Semantic similarity search using vector embeddings (primary method)
+- Graph traversal for contextual relationship discovery  
+- Simple semantic-first combination (no complex fusion algorithms)
+- Optimized for maximum speed while maintaining quality
 - Entity and topic-aware retrieval (future enhancement)
+
+Optimizations:
+- Removed fulltext search (semantic search covers keyword matching)
+- Removed RRF fusion algorithm (simple concatenation is faster)
+- Semantic results prioritized, graph results supplement
 """
 
 from typing import Dict, List, Any, Optional
@@ -31,7 +36,10 @@ class GraphRetrieval:
     
     def hybrid_search(self, query: str, conversation_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Perform hybrid search combining semantic, lexical, and graph methods.
+        Perform streamlined hybrid search with semantic-first approach.
+        
+        Uses semantic search as primary method, supplemented by graph traversal
+        for additional context. No complex fusion - simple, fast combination.
         
         Args:
             query: Search query text
@@ -39,12 +47,12 @@ class GraphRetrieval:
             limit: Maximum number of results to return
             
         Returns:
-            List of ranked search results with metadata
+            List of combined search results with metadata
         """
         try:
-            print(f"🔍 Performing graph-based hybrid search...")
+            print(f"� Performing streamlined hybrid search (semantic-first)...")
             
-            # Use Neo4j's hybrid search
+            # Use Neo4j's optimized hybrid search (no fulltext)
             results = self.neo4j_manager.hybrid_search(
                 query_text=query,
                 conversation_id=conversation_id,
@@ -61,13 +69,13 @@ class GraphRetrieval:
                     "user_message": result["user_message"],
                     "assistant_message": result["assistant_message"],
                     "timestamp": result["timestamp"],
-                    "rrf_score": result.get("rrf_score", 0.0),
-                    "source": result.get("source", "graph_hybrid"),
+                    "similarity_score": result.get("similarity_score", 0.0),
+                    "source": result.get("source", "semantic"),
                     "message_id": result["id"]
                 }
                 formatted_results.append(formatted_result)
             
-            print(f"✅ Graph hybrid search completed: {len(formatted_results)} results")
+            print(f"✅ Streamlined hybrid search completed: {len(formatted_results)} results")
             return formatted_results
             
         except Exception as e:
@@ -111,45 +119,7 @@ class GraphRetrieval:
         except Exception as e:
             print(f"❌ Error in semantic search: {str(e)}")
             return []
-    
-    def lexical_search(self, query: str, conversation_id: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """
-        Perform lexical/keyword search only.
-        
-        Args:
-            query: Search query text
-            conversation_id: Conversation context for filtering
-            limit: Maximum number of results to return
-            
-        Returns:
-            List of keyword-matched results
-        """
-        try:
-            results = self.neo4j_manager.fulltext_search(
-                query_text=query,
-                conversation_id=conversation_id,
-                limit=limit
-            )
-            
-            # Transform to expected format
-            formatted_results = []
-            for result in results:
-                formatted_result = {
-                    "text": result["text"],
-                    "conversation_id": result["conversation_id"],
-                    "turn_number": result["turn_number"],
-                    "relevance_score": result.get("relevance_score", 0.0),
-                    "source": "lexical",
-                    "message_id": result["id"]
-                }
-                formatted_results.append(formatted_result)
-            
-            return formatted_results
-            
-        except Exception as e:
-            print(f"❌ Error in lexical search: {str(e)}")
-            return []
-    
+
     def graph_traversal_search(self, seed_message_ids: List[str], hops: int = 1) -> List[Dict[str, Any]]:
         """
         Perform graph traversal search from seed messages.
@@ -205,7 +175,9 @@ if __name__ == "__main__":
         if results:
             print(f"✅ Graph retrieval test successful! Found {len(results)} results")
             for i, result in enumerate(results, 1):
-                print(f"   {i}. Score: {result.get('rrf_score', 0):.4f} - {result['text'][:80]}...")
+                score = result.get('similarity_score', 0)
+                source = result.get('source', 'unknown')
+                print(f"   {i}. Score: {score:.4f} ({source}) - {result['text'][:80]}...")
         else:
             print("❌ No results found")
         

@@ -512,92 +512,78 @@ class Neo4jManager:
             List of fused and ranked results
         """
         try:
-            print(f"🔍 Starting hybrid search for: '{query_text[:50]}...'")
+            print(f"🔍 Starting streamlined hybrid search for: '{query_text[:50]}...'")
             
-            # 1. Semantic search
+            # 1. Semantic search (primary method)
             semantic_results = self.semantic_search(query_text, conversation_id, limit * 2)
             
-            # 2. Fulltext search  
-            fulltext_results = self.fulltext_search(query_text, conversation_id, limit * 2)
-            
-            # 3. Graph traversal (on top semantic results)
+            # 2. Graph traversal (for relationship context)
             if semantic_results:
                 top_ids = [r["id"] for r in semantic_results[:5]]
                 graph_results = self.graph_traversal_search(top_ids, hops=1)
             else:
                 graph_results = []
             
-            # 4. Simple fusion using RRF (Reciprocal Rank Fusion)
-            fused_results = self._fuse_search_results(
-                semantic_results, fulltext_results, graph_results, limit
+            # 3. Simple concatenation (semantic-first, no fusion algorithm)
+            combined_results = self._combine_semantic_graph_simple(
+                semantic_results, graph_results, limit
             )
             
-            print(f"✅ Hybrid search completed: {len(fused_results)} final results")
-            return fused_results
-            
+            print(f"✅ Streamlined hybrid search completed: {len(combined_results)} final results")
+            return combined_results
+
         except Exception as e:
             print(f"❌ Error in hybrid search: {str(e)}")
             return []
-    
-    def _fuse_search_results(self, 
-                           semantic_results: List[Dict[str, Any]], 
-                           fulltext_results: List[Dict[str, Any]], 
-                           graph_results: List[Dict[str, Any]], 
-                           limit: int) -> List[Dict[str, Any]]:
+
+    def _combine_semantic_graph_simple(self, 
+                                     semantic_results: List[Dict[str, Any]], 
+                                     graph_results: List[Dict[str, Any]], 
+                                     limit: int) -> List[Dict[str, Any]]:
         """
-        Fuse multiple search results using Reciprocal Rank Fusion (RRF).
+        Simple combination of semantic + graph results without complex fusion.
+        
+        Semantic results take priority (they're already well-ranked), 
+        graph results fill remaining slots for additional context.
         
         Args:
             semantic_results: Results from semantic search
-            fulltext_results: Results from fulltext search
             graph_results: Results from graph traversal
             limit: Maximum number of results to return
             
         Returns:
-            Fused and ranked results
+            Combined results (semantic-first, deduplicated)
         """
         try:
-            # RRF parameters
-            k = 60  # RRF constant
+            # Use set to track seen IDs and avoid duplicates
+            seen_ids = set()
+            combined_results = []
             
-            # Score accumulator
-            scores = {}
-            all_results = {}
+            # 1. Add semantic results first (they're already scored and ranked)
+            for result in semantic_results[:limit]:
+                if result["id"] not in seen_ids:
+                    # Keep original similarity score, add source info
+                    result_copy = result.copy()
+                    result_copy["source"] = "semantic"
+                    combined_results.append(result_copy)
+                    seen_ids.add(result["id"])
             
-            # Process semantic results
-            for rank, result in enumerate(semantic_results, 1):
-                msg_id = result["id"]
-                rrf_score = 1.0 / (k + rank)
-                scores[msg_id] = scores.get(msg_id, 0) + rrf_score * 0.5  # 50% weight
-                all_results[msg_id] = result
+            # 2. Fill remaining slots with graph results for additional context
+            remaining_slots = limit - len(combined_results)
+            if remaining_slots > 0:
+                for result in graph_results[:remaining_slots]:
+                    if result["id"] not in seen_ids:
+                        # Add source info for graph results
+                        result_copy = result.copy()
+                        result_copy["source"] = "graph_traversal"
+                        combined_results.append(result_copy)
+                        seen_ids.add(result["id"])
             
-            # Process fulltext results
-            for rank, result in enumerate(fulltext_results, 1):
-                msg_id = result["id"]
-                rrf_score = 1.0 / (k + rank)
-                scores[msg_id] = scores.get(msg_id, 0) + rrf_score * 0.3  # 30% weight
-                all_results[msg_id] = result
-            
-            # Process graph results
-            for rank, result in enumerate(graph_results, 1):
-                msg_id = result["id"]
-                rrf_score = 1.0 / (k + rank)
-                scores[msg_id] = scores.get(msg_id, 0) + rrf_score * 0.2  # 20% weight
-                all_results[msg_id] = result
-            
-            # Sort by fused score and take top results
-            sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-            
-            fused_results = []
-            for msg_id in sorted_ids[:limit]:
-                result = all_results[msg_id].copy()
-                result["rrf_score"] = scores[msg_id]
-                fused_results.append(result)
-            
-            return fused_results
+            print(f"📊 Combined {len(combined_results)} results: {len([r for r in combined_results if r['source'] == 'semantic'])} semantic + {len([r for r in combined_results if r['source'] == 'graph_traversal'])} graph")
+            return combined_results[:limit]
             
         except Exception as e:
-            print(f"❌ Error in result fusion: {str(e)}")
+            print(f"❌ Error in simple combination: {str(e)}")
             return semantic_results[:limit]  # Fallback to semantic results
     
     def __del__(self):

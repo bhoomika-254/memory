@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-class GeminiService:
+class OpenAIService:
     """
     Service for interacting with Azure OpenAI GPT-4o models.
     
@@ -78,7 +78,7 @@ class GeminiService:
             print(f"❌ Failed to configure Azure OpenAI client: {str(e)}")
             raise
     
-    def _make_request_with_retry(self, messages: List[Dict[str, str]], temperature: float, task_name: str) -> Optional[str]:
+    def _make_request_with_retry(self, messages: List[Dict[str, str]], temperature: float, task_name: str) -> Dict[str, Any]:
         """
         Make a request to Azure OpenAI with retry logic.
         
@@ -88,7 +88,7 @@ class GeminiService:
             task_name: Name of the task for logging
             
         Returns:
-            Generated text response or None if failed
+            Dictionary with 'text' and 'token_usage' fields, or None if failed
         """
         for attempt in range(self.max_retries):
             try:
@@ -103,11 +103,19 @@ class GeminiService:
                     presence_penalty=0
                 )
                 
-                # Extract the response text
+                # Extract the response text and usage
                 if response.choices and len(response.choices) > 0:
                     result = response.choices[0].message.content
                     if result and result.strip():
-                        return result.strip()
+                        token_usage = {
+                            'prompt_tokens': response.usage.prompt_tokens if response.usage else 0,
+                            'completion_tokens': response.usage.completion_tokens if response.usage else 0,
+                            'total_tokens': response.usage.total_tokens if response.usage else 0
+                        }
+                        return {
+                            'text': result.strip(),
+                            'token_usage': token_usage
+                        }
                 
                 print(f"⚠️ Empty response from Azure OpenAI for {task_name} (attempt {attempt + 1})")
                 
@@ -119,8 +127,9 @@ class GeminiService:
                     print(f"💥 All {self.max_retries} attempts failed for {task_name}")
                     return None
         
+        return None
     
-    def transform_query(self, user_query: str, conversation_context: List[Dict[str, Any]] = None) -> str:
+    def transform_query(self, user_query: str, conversation_context: List[Dict[str, Any]] = None) -> tuple[str, Dict[str, Any]]:
         """
         Transform a user query into a clear, self-contained search query.
         
@@ -171,23 +180,19 @@ TRANSFORMED QUERY:"""
             {"role": "user", "content": prompt}
         ]
         
-        transformed = self._make_request_with_retry(messages, self.query_temp, "Query Transformation")
+        result = self._make_request_with_retry(messages, self.query_temp, "Query Transformation")
         
         # Fallback to original query if transformation fails
-        if not transformed:
+        if not result or not result.get('text'):
             print("⚠️  Query transformation failed, using original query")
-            return user_query
+            return user_query, {'total_tokens': 0}
         
         # Clean up the response (remove quotes, extra whitespace)
-        transformed = transformed.strip().strip('"').strip("'")
+        transformed = result['text'].strip().strip('"').strip("'")
         
         print(f"🔄 Query transformed: '{user_query}' → '{transformed}'")
-        return transformed
-        
-        # Fallback to original query if transformation fails
-        if not transformed:
-            print("⚠️  Query transformation failed, using original query")
-            return user_query
+        print(f"🔢 Tokens used: {result['token_usage']['total_tokens']}")
+        return transformed, result['token_usage']
         
         # Clean up the response (remove quotes, extra whitespace)
         transformed = transformed.strip().strip('"').strip("'")
@@ -196,128 +201,82 @@ TRANSFORMED QUERY:"""
         return transformed
     
     def compress_context(self, retrieved_chunks: List[Dict[str, Any]], 
-                        query: str) -> str:
+                        query: str) -> tuple[str, Dict[str, Any]]:
         """
-        Intelligently compress retrieved context with optimized strategies.
+        Compress retrieved context chunks into a concise summary.
         
-        Uses smart thresholds and lightweight approaches to minimize token usage
-        while preserving essential information.
+        This function takes multiple retrieved chunks and creates a coherent,
+        compressed summary that preserves the most relevant information.
         
         Args:
             retrieved_chunks: List of chunks from hybrid retrieval
             query: The search query for relevance filtering
             
         Returns:
-            Optimized context summary
+            Compressed context summary
         """
         if not retrieved_chunks:
             return "No relevant context found."
         
-        # Calculate total content size
-        total_chars = sum(len(chunk.get("text", "")) for chunk in retrieved_chunks)
-        
-        # Smart threshold-based compression decision
-        if len(retrieved_chunks) <= 2 and total_chars < 800:
-            # Skip compression for small contexts - just clean concatenation
-            print(f"⚡ Skipping compression (small context: {len(retrieved_chunks)} chunks, {total_chars} chars)")
-            return self._simple_concatenation(retrieved_chunks)
-        
-        if len(retrieved_chunks) <= 4 and total_chars < 1500:
-            # Use extractive selection for medium contexts
-            print(f"🎯 Using extractive selection ({len(retrieved_chunks)} chunks, {total_chars} chars)")
-            return self._extractive_selection(retrieved_chunks, query)
-        
-        # Use lightweight LLM compression only for large contexts
-        print(f"📝 Using lightweight compression ({len(retrieved_chunks)} chunks, {total_chars} chars)")
-        return self._lightweight_compression(retrieved_chunks, query)
-    
-    def _simple_concatenation(self, retrieved_chunks: List[Dict[str, Any]]) -> str:
-        """Simple concatenation with deduplication for small contexts."""
-        seen_content = set()
-        unique_texts = []
-        
-        for chunk in retrieved_chunks:
-            text = chunk.get("text", "").strip()
-            # Simple deduplication based on first 100 characters
-            text_signature = text[:100].lower()
-            if text_signature not in seen_content and text:
-                seen_content.add(text_signature)
-                unique_texts.append(text)
-        
-        return "\n\n".join(unique_texts)
-    
-    def _extractive_selection(self, retrieved_chunks: List[Dict[str, Any]], query: str) -> str:
-        """Select best chunks based on relevance scores and query keywords."""
-        # Sort chunks by relevance scores if available
-        sorted_chunks = sorted(
-            retrieved_chunks,
-            key=lambda x: (
-                x.get("rrf_score", 0) if x.get("rrf_score") else
-                x.get("semantic_score", 0) if x.get("semantic_score") else
-                0
-            ),
-            reverse=True
-        )
-        
-        # Take top chunks and perform simple deduplication
-        selected_texts = []
-        query_keywords = set(query.lower().split())
-        seen_content = set()
-        
-        for chunk in sorted_chunks[:3]:  # Max 3 chunks
-            text = chunk.get("text", "").strip()
-            if not text:
-                continue
-                
-            # Simple deduplication
-            text_signature = text[:100].lower()
-            if text_signature in seen_content:
-                continue
-                
-            # Prefer chunks with query keywords
-            text_lower = text.lower()
-            keyword_matches = sum(1 for keyword in query_keywords if keyword in text_lower)
-            
-            if keyword_matches > 0 or len(selected_texts) < 2:
-                seen_content.add(text_signature)
-                selected_texts.append(text)
-        
-        return "\n\n".join(selected_texts)
-    
-    def _lightweight_compression(self, retrieved_chunks: List[Dict[str, Any]], query: str) -> str:
-        """Lightweight LLM compression with minimal prompting."""
-        # Prepare chunks with minimal formatting
+        # Prepare chunks for compression
         chunks_text = []
         for i, chunk in enumerate(retrieved_chunks, 1):
-            text = chunk.get("text", "").strip()
-            if text:
-                chunks_text.append(f"[{i}] {text}")
+            chunk_info = f"[Chunk {i}]"
+            
+            # Add source information
+            if chunk.get("appears_in"):
+                sources = ", ".join(chunk["appears_in"])
+                chunk_info += f" (Sources: {sources})"
+            
+            # Add relevance scores
+            if chunk.get("rrf_score"):
+                chunk_info += f" (Relevance: {chunk['rrf_score']:.3f})"
+            
+            chunk_info += f"\n{chunk['text']}\n"
+            chunks_text.append(chunk_info)
         
-        combined_chunks = "\n\n".join(chunks_text)
+        combined_chunks = "\n".join(chunks_text)
         
-        # Ultra-minimal compression prompt
-        prompt = f"""Summarize the key information relevant to: {query}
+        # Create compression prompt
+        prompt = f"""You are an expert at extractive summarization. Your job is to compress multiple conversation chunks into a concise, coherent summary that preserves the most important information relevant to the user's query.
 
-Content:
+TASK: Create a compressed summary of the retrieved conversation chunks.
+
+RULES:
+1. Preserve key facts, concepts, and details relevant to the query
+2. Maintain logical flow and coherence
+3. Remove redundant information across chunks
+4. Keep important context like examples, explanations, or specific details
+5. Aim for 2-3 paragraphs maximum
+6. Focus on information that directly relates to the query
+7. Preserve any specific numbers, names, or technical terms
+
+USER QUERY: "{query}"
+
+RETRIEVED CHUNKS:
 {combined_chunks}
 
-Summary:"""
+COMPRESSED SUMMARY:"""
 
         messages = [
+            {"role": "system", "content": "You are an expert at extractive summarization. Create concise, coherent summaries from multiple text chunks."},
             {"role": "user", "content": prompt}
         ]
         
-        compressed = self._make_request_with_retry(messages, self.compression_temp, "Lightweight Compression")
+        result = self._make_request_with_retry(messages, self.compression_temp, "Context Compression")
         
-        if not compressed:
-            # Fallback to extractive selection
-            print("⚠️  Lightweight compression failed, using extractive fallback")
-            return self._extractive_selection(retrieved_chunks, query)
+        if not result or not result.get('text'):
+            # Fallback: just concatenate first few chunks
+            print("⚠️  Context compression failed, using fallback")
+            fallback_chunks = retrieved_chunks[:3]
+            return "\n\n".join([chunk["text"] for chunk in fallback_chunks]), {'total_tokens': 0}
         
-        return compressed
+        print(f"📝 Compressed {len(retrieved_chunks)} chunks into summary")
+        print(f"🔢 Tokens used: {result['token_usage']['total_tokens']}")
+        return result['text'], result['token_usage']
     
     def generate_response(self, user_query: str, compressed_context: str, 
-                         conversation_history: List[Dict[str, Any]]) -> str:
+                         conversation_history: List[Dict[str, Any]]) -> tuple[str, Dict[str, Any]]:
         """
         Generate the final conversational response.
         
@@ -371,14 +330,15 @@ RESPONSE:"""
             {"role": "user", "content": prompt}
         ]
         
-        response = self._make_request_with_retry(messages, self.generation_temp, "Response Generation")
+        result = self._make_request_with_retry(messages, self.generation_temp, "Response Generation")
         
-        if not response:
+        if not result or not result.get('text'):
             # Fallback response
-            return "I apologize, but I'm having trouble generating a response right now. Could you please try rephrasing your question?"
+            return "I apologize, but I'm having trouble generating a response right now. Could you please try rephrasing your question?", {'total_tokens': 0}
         
-        print(f"💬 Generated response ({len(response)} characters)")
-        return response
+        print(f"💬 Generated response ({len(result['text'])} characters)")
+        print(f"🔢 Tokens used: {result['token_usage']['total_tokens']}")
+        return result['text'], result['token_usage']
     
     def get_service_status(self) -> Dict[str, Any]:
         """
@@ -405,7 +365,7 @@ RESPONSE:"""
         }
 
 # Create global Azure OpenAI service instance
-gemini_service = GeminiService()
+openai_service = OpenAIService()
 
 # Example usage and testing
 if __name__ == "__main__":
@@ -413,7 +373,7 @@ if __name__ == "__main__":
     
     try:
         # Test service status
-        status = gemini_service.get_service_status()
+        status = openai_service.get_service_status()
         print(f"Service status: {status}")
         
         # Test query transformation
@@ -423,7 +383,7 @@ if __name__ == "__main__":
             {"user": "How does it work in practice?", "assistant": "In practice, you use heuristics like first-fit decreasing..."}
         ]
         
-        transformed = gemini_service.transform_query(test_query, test_context)
+        transformed = openai_service.transform_query(test_query, test_context)
         print(f"Transformed query: {transformed}")
         
         # Test context compression
@@ -433,11 +393,11 @@ if __name__ == "__main__":
             {"text": "Genetic algorithms can also be used for optimization problems.", "rrf_score": 0.76, "appears_in": ["semantic", "lexical"]}
         ]
         
-        compressed = gemini_service.compress_context(test_chunks, transformed)
+        compressed = openai_service.compress_context(test_chunks, transformed)
         print(f"Compressed context: {compressed[:100]}...")
         
         # Test response generation
-        response = gemini_service.generate_response(test_query, compressed, test_context)
+        response = openai_service.generate_response(test_query, compressed, test_context)
         print(f"Generated response: {response[:100]}...")
         
     except Exception as e:

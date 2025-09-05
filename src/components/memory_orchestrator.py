@@ -16,6 +16,7 @@ Key Features:
 from typing import Dict, List, Any, Optional, TypedDict
 from datetime import datetime
 import uuid
+import time
 
 from langgraph.graph import StateGraph, END
 
@@ -23,7 +24,7 @@ from src.utils.text_chunker import chunker
 
 # Import classes instead of instances to avoid dependency issues
 try:
-    from src.components.gemini_service import initialize_gemini_service
+    from src.components.openai_service import OpenAIService
     from src.components.graph_retrieval import GraphRetrieval
     from src.components.neo4j_manager import Neo4jManager
     from src.components.conversation_history_manager import ConversationHistoryManager
@@ -72,6 +73,15 @@ class ConversationState(TypedDict):
     # Metadata
     timestamp: str
     turn_number: int
+    
+    # Timing information
+    start_time: float
+    end_time: float
+    processing_time_seconds: float
+    
+    # Token usage tracking
+    total_tokens_used: int
+    token_breakdown: Dict[str, int]  # Per-operation token counts
 
 class MemoryOrchestrator:
     """
@@ -88,8 +98,7 @@ class MemoryOrchestrator:
             raise ImportError("Required components not available")
         
         try:
-            # Initialize optimized Gemini service with Neo4j driver for caching
-            self.gemini_service = initialize_gemini_service(self.neo4j_manager.driver)
+            self.openai_service = OpenAIService()
             self.neo4j_manager = Neo4jManager()
             self.graph_retrieval = GraphRetrieval()
             self.history_manager = ConversationHistoryManager()
@@ -210,12 +219,18 @@ class MemoryOrchestrator:
                 errors=[],
                 retry_count=0,
                 timestamp="",
-                turn_number=1
+                turn_number=1,
+                start_time=0.0,
+                end_time=0.0,
+                processing_time_seconds=0.0,
+                total_tokens_used=0,
+                token_breakdown={}
             )
         
-        # Update current query and timestamp
+        # Update current query, timestamp, and start timing
         state["current_query"] = user_query
         state["timestamp"] = datetime.now().isoformat()
+        state["start_time"] = time.time()
         state["errors"] = []  # Reset errors for new turn
         
         return state
@@ -276,22 +291,19 @@ class MemoryOrchestrator:
         try:
             print("🔄 Transforming query...")
             
-            # Get recent conversation context (optimized for tokens)
-            recent_messages = state["messages"][-4:]  # Reduced from 6 to 4 messages
+            # Get recent conversation context
+            recent_messages = state["messages"][-6:]  # Last 6 messages (3 turns)
             conversation_context = []
             
             for i in range(0, len(recent_messages), 2):
                 if i + 1 < len(recent_messages):
-                    # Truncate messages for token savings
-                    user_msg = recent_messages[i].get("content", "")[:200]
-                    assistant_msg = recent_messages[i + 1].get("content", "")[:200]
                     conversation_context.append({
-                        "user": user_msg,
-                        "assistant": assistant_msg
+                        "user": recent_messages[i].get("content", ""),
+                        "assistant": recent_messages[i + 1].get("content", "")
                     })
             
-            # Transform the query (with caching and smart skipping)
-            transformed = self.gemini_service.transform_query(
+            # Transform the query
+            transformed, token_usage = self.openai_service.transform_query(
                 state["current_query"],
                 conversation_context
             )
@@ -299,8 +311,13 @@ class MemoryOrchestrator:
             state["transformed_query"] = transformed
             state["tools_used"].append("query_transformation")
             
-            print(f"✅ Query transformed successfully")
+            # Track token usage
+            state["total_tokens_used"] += token_usage.get("total_tokens", 0)
+            state["token_breakdown"]["query_transformation"] = token_usage.get("total_tokens", 0)
             
+            print(f"✅ Query transformed successfully")
+            print(f"🔢 Tokens used: {token_usage.get('total_tokens', 0)}")
+
         except Exception as e:
             state["errors"].append(f"Query transformation failed: {str(e)}")
             state["transformed_query"] = state["current_query"]  # Fallback
@@ -336,7 +353,7 @@ class MemoryOrchestrator:
     
     def _hybrid_retrieval(self, state: ConversationState) -> ConversationState:
         """
-        Perform hybrid retrieval using semantic and lexical search.
+        Perform streamlined hybrid retrieval using semantic-first approach.
         
         Args:
             state: Current conversation state
@@ -345,9 +362,9 @@ class MemoryOrchestrator:
             Updated state with retrieved context
         """
         try:
-            print("🔍 Performing graph-based hybrid retrieval...")
+            print("� Performing streamlined hybrid retrieval (semantic-first)...")
             
-            # Use the graph retrieval component
+            # Use the streamlined graph retrieval component
             results = self.graph_retrieval.hybrid_search(
                 query=state["transformed_query"],
                 conversation_id=state["conversation_id"]
@@ -355,10 +372,10 @@ class MemoryOrchestrator:
             
             state["retrieved_context"] = results
             state["retrieval_completed"] = True
-            state["tools_used"].append("graph_hybrid_retrieval")
+            state["tools_used"].append("streamlined_hybrid_retrieval")
             
-            print(f"✅ Retrieved {len(results)} relevant chunks from graph")
-            
+            print(f"✅ Retrieved {len(results)} relevant chunks using streamlined approach")
+
         except Exception as e:
             state["errors"].append(f"Hybrid retrieval failed: {str(e)}")
             state["retrieved_context"] = []
@@ -397,7 +414,7 @@ class MemoryOrchestrator:
         try:
             print("📝 Compressing context...")
             
-            compressed = self.gemini_service.compress_context(
+            compressed, token_usage = self.openai_service.compress_context(
                 state["retrieved_context"],
                 state["transformed_query"]
             )
@@ -406,8 +423,13 @@ class MemoryOrchestrator:
             state["compression_completed"] = True
             state["tools_used"].append("context_compression")
             
-            print("✅ Context compressed successfully")
+            # Track token usage
+            state["total_tokens_used"] += token_usage.get("total_tokens", 0)
+            state["token_breakdown"]["context_compression"] = token_usage.get("total_tokens", 0)
             
+            print("✅ Context compressed successfully")
+            print(f"🔢 Tokens used: {token_usage.get('total_tokens', 0)}")
+
         except Exception as e:
             state["errors"].append(f"Context compression failed: {str(e)}")
             # Fallback: concatenate first few chunks
@@ -432,22 +454,19 @@ class MemoryOrchestrator:
         try:
             print("💬 Generating response...")
             
-            # Prepare conversation history (optimized for tokens)
+            # Prepare conversation history
             conversation_history = []
-            recent_messages = state["messages"][-4:]  # Reduced from 10 to 4 messages
+            recent_messages = state["messages"][-10:]  # Last 10 messages
             
             for i in range(0, len(recent_messages), 2):
                 if i + 1 < len(recent_messages):
-                    # Truncate messages for token savings
-                    user_msg = recent_messages[i].get("content", "")[:150]
-                    assistant_msg = recent_messages[i + 1].get("content", "")[:150]
                     conversation_history.append({
-                        "user": user_msg,
-                        "assistant": assistant_msg
+                        "user": recent_messages[i].get("content", ""),
+                        "assistant": recent_messages[i + 1].get("content", "")
                     })
             
             # Generate response
-            response = self.gemini_service.generate_response(
+            response, token_usage = self.openai_service.generate_response(
                 user_query=state["current_query"],
                 compressed_context=state["compressed_context"],
                 conversation_history=conversation_history
@@ -456,8 +475,13 @@ class MemoryOrchestrator:
             state["final_response"] = response
             state["tools_used"].append("response_generation")
             
-            print("✅ Response generated successfully")
+            # Track token usage
+            state["total_tokens_used"] += token_usage.get("total_tokens", 0)
+            state["token_breakdown"]["response_generation"] = token_usage.get("total_tokens", 0)
             
+            print("✅ Response generated successfully")
+            print(f"🔢 Tokens used: {token_usage.get('total_tokens', 0)}")
+
         except Exception as e:
             state["errors"].append(f"Response generation failed: {str(e)}")
             state["final_response"] = "I apologize, but I'm having trouble generating a response right now. Could you please try again?"
@@ -506,8 +530,14 @@ class MemoryOrchestrator:
             state["tool_results"]["stored_chunks"] = len(chunks)
             state["tool_results"]["graph_message_nodes"] = len(stored_ids)
             
-            print(f"✅ Stored {len(chunks)} chunks in graph database")
+            # Calculate and store final timing
+            state["end_time"] = time.time()
+            state["processing_time_seconds"] = round(state["end_time"] - state["start_time"], 2)
             
+            print(f"✅ Stored {len(chunks)} chunks in graph database")
+            print(f"⏱️ Total processing time: {state['processing_time_seconds']} seconds")
+            print(f"🔢 Total tokens used: {state['total_tokens_used']}")
+
         except Exception as e:
             state["errors"].append(f"Memory storage failed: {str(e)}")
             print(f"❌ Memory storage error: {str(e)}")
@@ -525,6 +555,11 @@ class MemoryOrchestrator:
             Updated state with error handling
         """
         print("🚨 Handling errors...")
+        
+        # Calculate timing even in error cases
+        if state.get("start_time", 0) > 0:
+            state["end_time"] = time.time()
+            state["processing_time_seconds"] = round(state["end_time"] - state["start_time"], 2)
         
         if state["errors"]:
             error_summary = "; ".join(state["errors"])
@@ -566,6 +601,9 @@ class MemoryOrchestrator:
                 "tools_used": final_state["tools_used"],
                 "retrieved_chunks": len(final_state["retrieved_context"]),
                 "errors": final_state["errors"],
+                "processing_time_seconds": final_state.get("processing_time_seconds", 0.0),
+                "total_tokens_used": final_state.get("total_tokens_used", 0),
+                "token_breakdown": final_state.get("token_breakdown", {}),
                 "processing_metadata": {
                     "needs_retrieval": final_state["needs_retrieval"],
                     "retrieval_completed": final_state["retrieval_completed"],
@@ -581,6 +619,13 @@ class MemoryOrchestrator:
             error_msg = f"Conversation processing failed: {str(e)}"
             print(f"❌ {error_msg}")
             
+            # Calculate timing for error case
+            end_time = time.time()
+            start_time = 0.0
+            if conversation_id in self.active_conversations:
+                start_time = self.active_conversations[conversation_id].get("start_time", 0.0)
+            processing_time = round(end_time - start_time, 2) if start_time > 0 else 0.0
+            
             return {
                 "response": "I apologize, but I encountered an error while processing your request. Please try again.",
                 "conversation_id": conversation_id,
@@ -588,6 +633,9 @@ class MemoryOrchestrator:
                 "tools_used": [],
                 "retrieved_chunks": 0,
                 "errors": [error_msg],
+                "processing_time_seconds": processing_time,
+                "total_tokens_used": 0,
+                "token_breakdown": {},
                 "processing_metadata": {}
             }
     

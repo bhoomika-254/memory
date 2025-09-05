@@ -42,18 +42,13 @@ except ImportError as e:
     memory_orchestrator = None
 
 try:
-    from src.components.gemini_service import initialize_gemini_service
+    from src.components.openai_service import openai_service
     from src.components.neo4j_manager import Neo4jManager
     COMPONENTS_AVAILABLE = True
-    
-    # Initialize optimized services
-    neo4j_manager = Neo4jManager()
-    gemini_service = initialize_gemini_service(neo4j_manager.driver)
-    
 except ImportError as e:
     st.error(f"Components not available: {e}")
     COMPONENTS_AVAILABLE = False
-    gemini_service = None
+    openai_service = None
 
 class MemoryUI:
     """
@@ -124,11 +119,11 @@ class MemoryUI:
             
         try:
             # Get system status
-            gemini_status = gemini_service.get_service_status()
+            openai_status = openai_service.get_service_status()
             
-            # Gemini status
-            st.markdown("**🤖 Gemini Service**")
-            if gemini_status.get("api_configured"):
+            # Azure OpenAI status
+            st.markdown("**🤖 Azure OpenAI Service**")
+            if openai_status.get("api_configured"):
                 st.success("✅ Connected")
             else:
                 st.error("❌ Not configured")
@@ -266,6 +261,23 @@ class MemoryUI:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
+                
+                # Show timing information for assistant messages
+                if message["role"] == "assistant" and "metadata" in message:
+                    processing_time = message["metadata"].get("processing_time_seconds", 0)
+                    retrieved_chunks = message["metadata"].get("retrieved_chunks", 0)
+                    tools_used = message["metadata"].get("tools_used", [])
+                    total_tokens = message["metadata"].get("total_tokens_used", 0)
+                    
+                    if processing_time > 0:
+                        timing_info = f"⏱️ {processing_time}s"
+                        if total_tokens > 0:
+                            timing_info += f" • 🎫 {total_tokens:,} tokens"
+                        if retrieved_chunks > 0:
+                            timing_info += f" • 🔍 {retrieved_chunks} chunks"
+                        if tools_used:
+                            timing_info += f" • 🛠️ {len(tools_used)} tools"
+                        st.caption(timing_info)
     
     def _process_user_input(self, user_input: str):
         """Process user input and generate response."""
@@ -297,6 +309,22 @@ class MemoryUI:
                     # Display the response
                     response_text = response_data["response"]
                     st.markdown(response_text)
+                    
+                    # Show timing information
+                    processing_time = response_data.get("processing_time_seconds", 0)
+                    retrieved_chunks = response_data.get("retrieved_chunks", 0)
+                    tools_used = response_data.get("tools_used", [])
+                    total_tokens = response_data.get("total_tokens_used", 0)
+                    
+                    if processing_time > 0:
+                        timing_info = f"⏱️ {processing_time}s"
+                        if total_tokens > 0:
+                            timing_info += f" • 🎫 {total_tokens:,} tokens"
+                        if retrieved_chunks > 0:
+                            timing_info += f" • 🔍 {retrieved_chunks} chunks"
+                        if tools_used:
+                            timing_info += f" • 🛠️ {len(tools_used)} tools"
+                        st.caption(timing_info)
                     
                     # Add assistant message to chat history
                     assistant_message = {
