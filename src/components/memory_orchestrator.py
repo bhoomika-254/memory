@@ -24,9 +24,9 @@ from src.utils.text_chunker import chunker
 # Import classes instead of instances to avoid dependency issues
 try:
     from src.components.gemini_service import GeminiService
-    from src.components.retrieval_fusion import RetrievalFusion
-    from src.components.qdrant_manager import QdrantManager
-    from src.components.whoosh_manager import WhooshManager
+    from src.components.graph_retrieval import GraphRetrieval
+    from src.components.neo4j_manager import Neo4jManager
+    from src.components.conversation_history_manager import ConversationHistoryManager
     COMPONENTS_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Some components not available: {e}")
@@ -89,10 +89,10 @@ class MemoryOrchestrator:
         
         try:
             self.gemini_service = GeminiService()
-            self.qdrant_manager = QdrantManager()
-            self.whoosh_manager = WhooshManager()
-            self.retrieval_fusion = RetrievalFusion()
-            print("✅ All components initialized successfully")
+            self.neo4j_manager = Neo4jManager()
+            self.graph_retrieval = GraphRetrieval()
+            self.history_manager = ConversationHistoryManager()
+            print("✅ All graph-based components initialized successfully")
         except Exception as e:
             raise ImportError(f"Failed to initialize components: {e}")
         
@@ -341,19 +341,19 @@ class MemoryOrchestrator:
             Updated state with retrieved context
         """
         try:
-            print("🔍 Performing hybrid retrieval...")
+            print("🔍 Performing graph-based hybrid retrieval...")
             
-            # Use the retrieval fusion component
-            results = self.retrieval_fusion.hybrid_search(
+            # Use the graph retrieval component
+            results = self.graph_retrieval.hybrid_search(
                 query=state["transformed_query"],
                 conversation_id=state["conversation_id"]
             )
             
             state["retrieved_context"] = results
             state["retrieval_completed"] = True
-            state["tools_used"].append("hybrid_retrieval")
+            state["tools_used"].append("graph_hybrid_retrieval")
             
-            print(f"✅ Retrieved {len(results)} relevant chunks")
+            print(f"✅ Retrieved {len(results)} relevant chunks from graph")
             
         except Exception as e:
             state["errors"].append(f"Hybrid retrieval failed: {str(e)}")
@@ -469,7 +469,7 @@ class MemoryOrchestrator:
             Updated state after memory storage
         """
         try:
-            print("💾 Storing conversation in memory...")
+            print("💾 Storing conversation in graph database...")
             
             # Create chunks for the current conversation turn
             chunks = chunker.chunk_conversation_turn(
@@ -479,13 +479,8 @@ class MemoryOrchestrator:
                 conversation_id=state["conversation_id"]
             )
             
-            # Store in vector database
-            point_ids = self.qdrant_manager.store_conversation_chunks(
-                chunks, state["conversation_id"]
-            )
-            
-            # Index in lexical search
-            indexed_count = self.whoosh_manager.index_conversation_chunks(
+            # Store in graph database (Neo4j)
+            stored_ids = self.neo4j_manager.store_conversation_chunks(
                 chunks, state["conversation_id"]
             )
             
@@ -500,12 +495,11 @@ class MemoryOrchestrator:
             if len(state["messages"]) > max_messages:
                 state["messages"] = state["messages"][-max_messages:]
             
-            state["tools_used"].append("memory_storage")
+            state["tools_used"].append("graph_memory_storage")
             state["tool_results"]["stored_chunks"] = len(chunks)
-            state["tool_results"]["qdrant_points"] = len(point_ids)
-            state["tool_results"]["whoosh_indexed"] = indexed_count
+            state["tool_results"]["graph_message_nodes"] = len(stored_ids)
             
-            print(f"✅ Stored {len(chunks)} chunks in memory")
+            print(f"✅ Stored {len(chunks)} chunks in graph database")
             
         except Exception as e:
             state["errors"].append(f"Memory storage failed: {str(e)}")
@@ -631,15 +625,55 @@ class MemoryOrchestrator:
         # Clear from active memory
         self.clear_conversation(conversation_id)
         
-        # Clear from databases
-        qdrant_success = self.qdrant_manager.clear_conversation_memory(conversation_id)
-        whoosh_success = self.whoosh_manager.clear_conversation_index(conversation_id)
+        # TODO: Implement Neo4j conversation clearing
+        # For now, just clear active memory
+        print(f"🧹 Cleared active memory for conversation: {conversation_id}")
+        print("⚠️  Note: Neo4j conversation clearing not yet implemented")
         
-        success = qdrant_success and whoosh_success
-        if success:
-            print(f"🧹 Completely cleared memory for conversation: {conversation_id}")
+        return True
+    
+    def get_conversation_summary(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Get a summary of the conversation including metadata.
         
-        return success
+        Args:
+            conversation_id: Conversation to summarize
+            
+        Returns:
+            Dictionary with conversation summary
+        """
+        try:
+            if self.history_manager:
+                conv_details = self.history_manager.get_conversation_details(conversation_id)
+                if conv_details:
+                    return {
+                        "conversation_id": conversation_id,
+                        "summary": conv_details.get("summary", "No summary available"),
+                        "topics": conv_details.get("topics", []),
+                        "total_turns": conv_details.get("total_turns", 0),
+                        "total_messages": conv_details.get("total_messages", 0),
+                        "start_time": conv_details.get("start_time"),
+                        "end_time": conv_details.get("end_time")
+                    }
+            
+            # Fallback to basic state info
+            state = self.get_conversation_state(conversation_id)
+            if state:
+                return {
+                    "conversation_id": conversation_id,
+                    "summary": f"Conversation with {len(state.get('messages', []))} messages",
+                    "topics": [],
+                    "total_turns": state.get("turn_number", 0),
+                    "total_messages": len(state.get("messages", [])),
+                    "start_time": state.get("timestamp"),
+                    "end_time": state.get("timestamp")
+                }
+            
+            return {}
+            
+        except Exception as e:
+            print(f"❌ Error getting conversation summary: {str(e)}")
+            return {}
 
 # Create global orchestrator instance if components are available
 try:

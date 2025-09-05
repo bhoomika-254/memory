@@ -9,11 +9,8 @@ langchain-core>=0.2.0
 # Google Gemini LLM
 google-generativeai>=0.3.2
 
-# Vector Database
-qdrant-client>=1.6.4
-
-# Lexical Search
-whoosh>=2.7.4
+# Graph Database (Neo4j) - replaces Qdrant + Whoosh
+neo4j==5.28.2
 
 # Embeddings
 sentence-transformers>=2.2.2
@@ -28,3 +25,4 @@ rank-bm25>=0.2.2
 # Data handling
 pandas>=2.1.4
 numpy>=1.24.3
+plotly>=5.17.0  # For advanced charts in analytics

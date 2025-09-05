@@ -132,11 +132,24 @@ The application will be available at `http://localhost:8501`
 - **🗑️ Clear Chat**: Removes current session but keeps stored memories
 - **🧹 Clear Memory**: Completely wipes all stored memories for the conversation
 - **🆕 New Conversation**: Starts fresh but can still access previous memories
+- **📚 History**: Access comprehensive conversation history and analytics
+
+### Advanced History Features
+- **📋 Conversation List**: View all past conversations with previews and metadata
+- **🔍 Search**: Full-text search across all conversation history
+- **📊 Analytics**: Detailed statistics and trending topics analysis
+- **📤 Export/Import**: Backup and restore conversation data (JSON/CSV formats)
+- **🏷️ Topic Organization**: Automatic topic extraction and categorization
+- **📅 Timeline View**: Browse conversations by date and time periods
 
 ### Advanced Features
 - **Debug Mode**: Toggle to see retrieval details and processing information
 - **Retrieved Context**: View the specific memory chunks used for each response
 - **System Status**: Monitor database connections and memory statistics
+- **Conversation History**: Browse, search, and analyze past conversations
+- **Data Management**: Export conversations for backup or analysis
+- **Topic Analytics**: Track conversation themes and trending topics
+- **Timeline Views**: Explore conversations across different time periods
 
 ## 📁 Project Structure
 
@@ -205,12 +218,33 @@ WHOOSH_INDEX_DIR=data/whoosh_index
 
 ## 🛠️ Development
 
+### Data Management
+
+The system includes a comprehensive data management utility:
+
+```bash
+# Export conversations from last 30 days
+python data_manager.py export --format json --days 30
+
+# Generate analytics report
+python data_manager.py analytics --days 7
+
+# Import conversations from backup
+python data_manager.py import --file backup.json
+
+# Clean up old conversations (older than 90 days)
+python data_manager.py cleanup --older-than 90
+
+# Test database connections
+python data_manager.py test
+```
+
 ### Running Tests
 ```bash
 # Test individual components
 python -m src.utils.text_chunker
-python -m src.components.qdrant_manager
-python -m src.components.whoosh_manager
+python -m src.components.neo4j_manager
+python -m src.components.conversation_history_manager
 ```
 
 ### Adding New Features
